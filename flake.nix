@@ -41,6 +41,7 @@
             pkgs.cargo-nextest
             pkgs.just
             pkgs.stylua
+            pkgs.nil
             pkgs.nixfmt
             pkgs.pkg-config
             pkgs.openssl
