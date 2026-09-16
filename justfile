@@ -10,5 +10,12 @@ lint:
 test:
     cargo nextest run
 
+fmt:
+    cargo fmt --all
+
 fmt-lua:
     stylua plugin/
+
+fmt-check:
+    cargo fmt --all -- --check
+    stylua --check plugin/

@@ -49,7 +49,10 @@ fn the_old_model_key_is_rejected_with_the_new_name() {
 
 #[test]
 fn every_reviewer_gets_a_section() {
-    let h = Harness::new(vec![Ok("first findings".into()), Ok("second findings".into())]);
+    let h = Harness::new(vec![
+        Ok("first findings".into()),
+        Ok("second findings".into()),
+    ]);
     h.answer_available_models(None);
     h.set_reviewers("{ { model_name = \"a/one\" }, { model_name = \"b/two\" } }");
 
@@ -258,7 +261,10 @@ fn a_non_string_thinking_is_a_configuration_error() {
         let err = h
             .review("one file changed")
             .expect_err(&format!("{entries} should be unusable"));
-        assert!(err.contains("Reviewer configuration is wrong"), "{entries}: {err}");
+        assert!(
+            err.contains("Reviewer configuration is wrong"),
+            "{entries}: {err}"
+        );
     }
 }
 
@@ -266,10 +272,7 @@ fn a_non_string_thinking_is_a_configuration_error() {
 fn the_command_is_registered() {
     let h = Harness::new(vec![]);
     let names = h.command_names();
-    assert!(
-        names.iter().any(|n| n == "/multi-review"),
-        "got: {names:?}"
-    );
+    assert!(names.iter().any(|n| n == "/multi-review"), "got: {names:?}");
 }
 
 #[test]
@@ -297,8 +300,14 @@ fn a_thinking_request_above_the_session_is_reported() {
     );
 
     let out = h.review("ctx").unwrap();
-    assert!(out.contains("capped at this session (medium)"), "got: {out}");
-    assert!(out.contains("deep asked for high, ran at medium"), "got: {out}");
+    assert!(
+        out.contains("capped at this session (medium)"),
+        "got: {out}"
+    );
+    assert!(
+        out.contains("deep asked for high, ran at medium"),
+        "got: {out}"
+    );
     assert!(
         !out.contains("shallow asked"),
         "a request below the session is left alone: {out}"
@@ -313,7 +322,10 @@ fn an_off_session_drops_every_thinking_request() {
     h.set_reviewers("{ { name = \"deep\", thinking = \"high\" } }");
 
     let out = h.review("ctx").unwrap();
-    assert!(out.contains("deep asked for high, ran at off"), "got: {out}");
+    assert!(
+        out.contains("deep asked for high, ran at off"),
+        "got: {out}"
+    );
 }
 
 #[test]

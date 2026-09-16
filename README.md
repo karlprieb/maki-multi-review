@@ -149,10 +149,14 @@ A reviewer that fails gets a `FAILED` section naming the cause, plus a flash in 
 `nix develop` gives you everything the checks need: Rust 1.95 with rust-analyzer, `cargo-nextest`, `just`, `stylua`, and `nixfmt`. The toolchain matches the one maki's own flake pins, and the shell sets `OPENSSL_NO_VENDOR=1` so `openssl-sys` links the shell's OpenSSL instead of building its own.
 
 ```text
-just check    # cargo check --tests
-just lint     # cargo clippy --tests -- -D warnings
-just test     # cargo nextest run
-just fmt-lua  # stylua plugin/
+just check     # cargo check --tests
+just lint      # cargo clippy --tests -- -D warnings
+just test      # cargo nextest run
+just fmt       # cargo fmt --all
+just fmt-lua   # stylua plugin/
+just fmt-check # both formatters in check mode, the way CI runs them
 ```
+
+CI runs those same checks, so run `just fmt-check` before pushing. Rust formatting is the easy one to miss, since it is the only check with no failing test to point at it.
 
 The plugin is Lua, so Rust is here only to build the maki host. The tests load `plugin/` through the real `PluginHost`, which means a syntax error or a bad registration fails `just test`.

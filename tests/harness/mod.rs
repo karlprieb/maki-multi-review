@@ -364,9 +364,7 @@ impl ToolInvocation for TaskInvocation {
     fn execute(self: Box<Self>, _ctx: &ToolContext) -> ExecFuture<'_> {
         Box::pin(async move {
             ToolExecResult {
-                output: self
-                    .reply
-                    .map(|text| ToolOutput::Plain(text.into())),
+                output: self.reply.map(|text| ToolOutput::Plain(text.into())),
                 annotation: None,
                 written_path: None,
             }
