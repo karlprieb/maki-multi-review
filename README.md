@@ -108,9 +108,6 @@ security asked for high, ran at medium
 A session set to `adaptive` has no ceiling, so reviewers get what they ask for. A session set to `off` can run nothing above it, so every reviewer runs with thinking off. Raise your own level with `/thinking` if you want a reviewer to go deeper.
 
 `model_name` and `model_tier` both pick the model, and `model_name` wins when you set both. Use `model_name` when you want one exact model, `model_tier` when you only care how strong it is.
-
-The old `model` key is now an error rather than a silently ignored field. Replace it with `model_name`; the error names the reviewer and the replacement.
-
 Without `name`, the generated name is the position in the list and the part of the model after the last slash, so `deepseek/deepseek-flash` at position 1 becomes `1-deepseek-flash`. That name still reaches the prompt, which is why a real angle is worth setting.
 
 The section header shows the model next to the name only when you set `name`. Without it the generated name already carries the model.
@@ -131,7 +128,7 @@ The agent collects `git diff` and `git diff --cached`, summarizes both, and call
 /multi-review focus on the error paths in the new parser
 ```
 
-Same diff collection, but your text is appended to the tool call as an instruction the agent honors when it writes the summary. Note the difference: the argument steers what the agent emphasizes when it describes the changes, it does not add a reviewer or change any model. To change who reviews, edit the slot.
+Your text tells the agent where to find the changes, such as a branch, a commit range, or files to look at. The agent gathers them, summarizes, and calls the tool. The argument does not add a reviewer or change any model. To change who reviews, edit the slot.
 
 The bare form also has one behavior the argument form drops, the empty-diff check. With an instruction the agent calls the tool regardless, which is what you want when you are pointing at something specific.
 

@@ -37,17 +37,6 @@ fn unusable_reviewers_report_a_configuration_error() {
 }
 
 #[test]
-fn the_old_model_key_is_rejected_with_the_new_name() {
-    let h = Harness::new(vec![Ok("f".into())]);
-    h.answer_available_models(None);
-    h.set_reviewers("{ { model = \"claude/claude-opus-5\" } }");
-
-    let err = h.review("ctx").unwrap_err();
-    assert!(err.contains("model_name"), "got: {err}");
-    assert_eq!(h.task_count(), 0, "it must not run with the wrong model");
-}
-
-#[test]
 fn every_reviewer_gets_a_section() {
     let h = Harness::new(vec![
         Ok("first findings".into()),
@@ -288,6 +277,31 @@ fn the_command_prompts_the_agent() {
         prompts[0]
     );
     assert!(prompts[0].contains("multi_review"), "got: {}", prompts[0]);
+}
+
+#[test]
+fn the_command_with_args_drops_the_git_diff_step() {
+    let h = Harness::new(vec![]);
+    h.run_command(harness::PLUGIN_NAME, "review the last commit");
+
+    let prompts = h.session_prompts();
+    assert_eq!(prompts.len(), 1, "got: {prompts:?}");
+    assert!(
+        prompts[0].contains("Gather the changes to be reviewed from the following instructions"),
+        "got: {}",
+        prompts[0]
+    );
+    assert!(!prompts[0].contains("git diff"), "got: {}", prompts[0]);
+}
+
+#[test]
+fn the_command_without_args_keeps_the_git_diff_step() {
+    let h = Harness::new(vec![]);
+    h.run_command(harness::PLUGIN_NAME, "");
+
+    let prompts = h.session_prompts();
+    assert_eq!(prompts.len(), 1, "got: {prompts:?}");
+    assert!(prompts[0].contains("git diff"), "got: {}", prompts[0]);
 }
 
 #[test]

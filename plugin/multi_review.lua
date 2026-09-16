@@ -57,12 +57,6 @@ local function effective_reviewers()
     return nil
   end
   for i, reviewer in ipairs(list) do
-    if type(reviewer) == "table" and reviewer.model ~= nil then
-      return nil,
-        ("reviewer %d uses `model`, which is now `model_name`. Rename it, so the model and model_tier cannot be confused."):format(
-          i
-        )
-    end
     if
       type(reviewer) ~= "table"
       or not is_optional_string(reviewer.name)
@@ -286,7 +280,7 @@ maki.api.register_command({
     local args = opts.args
     local target
     if args and args ~= "" then
-      target = [=[Run the multi_review tool. First gather the current changes with `git diff` (unstaged) and `git diff --cached` (staged), then call multi_review with a summary of the files and what changed from both, honoring this instruction: ]=]
+      target = [=[Run the multi_review tool. Gather the changes to be reviewed from the following instructions, then call multi_review with a summary of the files and what changed. Instructions: ]=]
         .. args
     else
       target =
