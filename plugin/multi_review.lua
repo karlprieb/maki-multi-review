@@ -2,10 +2,10 @@ local function reviewer_name(reviewer, index)
   if reviewer.name then
     return reviewer.name
   end
-  local model = reviewer.model
-  if model then
-    local slash = model:find("/[^/]*$")
-    local suffix = slash and model:sub(slash + 1) or model
+  local model_name = reviewer.model_name
+  if model_name then
+    local slash = model_name:find("/[^/]*$")
+    local suffix = slash and model_name:sub(slash + 1) or model_name
     return tostring(index) .. "-" .. suffix
   end
   return tostring(index)
@@ -23,16 +23,30 @@ local function spawn_reviewer(ctx, reviewer, context, index)
     prompt = prompt,
     subagent_type = "research",
   }
-  if reviewer.model then
-    input.model = reviewer.model
+  if reviewer.model_name then
+    input.model = reviewer.model_name
+  end
+  if reviewer.thinking then
+    input.thinking = reviewer.thinking
+  end
+  if reviewer.model_tier then
+    input.model_tier = reviewer.model_tier
   end
 
-  return maki.agent.call_tool(ctx, "task", input)
+  local value, err = maki.agent.call_tool(ctx, "task", input)
+  if value == nil or value == "" then
+    error(err or "returned nothing", 0)
+  end
+  return value
 end
 
 local reviewers_slot = maki.api.declare_slot("multireview.reviewers", function()
   return {}
 end)
+
+local function is_optional_string(v)
+  return v == nil or type(v) == "string"
+end
 
 local function effective_reviewers()
   local list = reviewers_slot()
@@ -43,9 +57,21 @@ local function effective_reviewers()
     return nil
   end
   for i, reviewer in ipairs(list) do
-    if type(reviewer) ~= "table" or type(reviewer.name or "") ~= "string" or type(reviewer.model or "") ~= "string" then
-      maki.log.error(("multi-review: reviewer %d needs an optional string name and model."):format(i))
-      return nil
+    if type(reviewer) == "table" and reviewer.model ~= nil then
+      return nil,
+        ("reviewer %d uses `model`, which is now `model_name`. Rename it, so the model and model_tier cannot be confused."):format(
+          i
+        )
+    end
+    if
+      type(reviewer) ~= "table"
+      or not is_optional_string(reviewer.name)
+      or not is_optional_string(reviewer.model_name)
+      or not (is_optional_string(reviewer.thinking) or type(reviewer.thinking) == "number")
+      or not is_optional_string(reviewer.model_tier)
+    then
+      return nil,
+        ("reviewer %d takes optional string name, model_name, model_tier, and string or number thinking."):format(i)
     end
   end
   return list
@@ -54,8 +80,69 @@ end
 local CONFIG_HINT = [[No reviewer is configured. Set the list in the global init.lua:
 
   maki.api.set_slot("multireview.reviewers", function()
-    return { { model = "deepseek/deepseek-flash" }, { model = "claude/claude-opus-5" } }
+    return { { model_name = "deepseek/deepseek-flash" }, { model_name = "claude/claude-opus-5" } }
   end)]]
+
+local function failure_cause(r)
+  if r.ok then
+    return "returned nothing"
+  end
+  local err = tostring(r.err or "unknown error")
+  err = err:gsub("^runtime error: ", ""):gsub("\nstack traceback:.*$", "")
+  return err
+end
+
+local function task_rejects_model(ctx)
+  local ok, defs = pcall(maki.agent.tools, ctx, { audience = "main" })
+  if not ok or type(defs) ~= "table" then
+    return false
+  end
+  for _, def in ipairs(defs) do
+    if type(def) == "table" and def.name == "task" then
+      local properties = def.input_schema and def.input_schema.properties
+      if type(properties) ~= "table" then
+        return false
+      end
+      return properties.model == nil
+    end
+  end
+  return false
+end
+
+local function downgraded_reviewers(list, session, options)
+  if type(session) ~= "table" or session.supports_thinking == false then
+    return {}
+  end
+  local ceiling = session.thinking
+  local by_name = {}
+  if type(options) == "table" then
+    for _, option in ipairs(options) do
+      if type(option) == "table" and option.name then
+        by_name[option.name] = option.tokens
+      end
+    end
+  end
+  local out = {}
+  for i, reviewer in ipairs(list) do
+    local asked = reviewer.thinking
+    if asked ~= nil and asked ~= ceiling then
+      local above
+      if ceiling == "off" then
+        above = true
+      elseif by_name[asked] and by_name[ceiling] then
+        if asked == "adaptive" or ceiling == "adaptive" then
+          above = ceiling ~= "adaptive"
+        else
+          above = by_name[asked] > by_name[ceiling]
+        end
+      end
+      if above then
+        out[#out + 1] = { name = reviewer_name(reviewer, i), asked = tostring(asked), ran = tostring(ceiling) }
+      end
+    end
+  end
+  return out
+end
 
 maki.api.register_tool({
   name = "multi_review",
@@ -77,9 +164,14 @@ maki.api.register_tool({
   handler = function(input, ctx)
     local context = input.context
 
-    local list = effective_reviewers()
+    local list, config_error = effective_reviewers()
     if not list then
-      return { llm_output = CONFIG_HINT, format = "markdown", is_error = true }
+      maki.log.error("multi-review: " .. (config_error or "multireview.reviewers slot returned no usable list"))
+      return {
+        llm_output = config_error and ("Reviewer configuration is wrong: " .. config_error) or CONFIG_HINT,
+        format = "markdown",
+        is_error = true,
+      }
     end
 
     local available = maki.model.available()
@@ -91,14 +183,50 @@ maki.api.register_tool({
       end
     end
 
+    if task_rejects_model(ctx) then
+      local named = {}
+      for i, reviewer in ipairs(list) do
+        if reviewer.model_name then
+          named[#named + 1] = reviewer_name(reviewer, i)
+        end
+      end
+      if #named > 0 then
+        return {
+          llm_output = (
+            "These reviewers pin a model_name, but the task tool does not accept one: %s\n\n"
+            .. "Enable it in your config, then try again:\n\n  maki.setup({\n    plugins = {\n      task = { allow_model = true },\n    },\n  })\n\n"
+            .. "Without it every reviewer runs on the session model."
+          ):format(table.concat(named, ", ")),
+          format = "markdown",
+          is_error = true,
+        }
+      end
+    end
+
     local fns = {}
     local subjects = {}
     local skipped = {}
+    local notes = {}
+
+    local session_ok, session = pcall(maki.model.get)
+    if session_ok and type(session) == "table" then
+      local downgraded = downgraded_reviewers(list, session, session.thinking_options)
+      if #downgraded > 0 then
+        local lines = {}
+        for _, entry in ipairs(downgraded) do
+          lines[#lines + 1] = ("%s asked for %s, ran at %s"):format(entry.name, entry.asked, entry.ran)
+        end
+        notes[#notes + 1] = ("Thinking is capped at this session (%s), so these were lowered:\n%s"):format(
+          tostring(session.thinking),
+          table.concat(lines, "\n")
+        )
+      end
+    end
     for i, reviewer in ipairs(list) do
-      if reviewer.model and allowed and not allowed[reviewer.model] then
+      if reviewer.model_name and allowed and not allowed[reviewer.model_name] then
         skipped[#skipped + 1] = ("%s (%s, not selectable: blocked by allowed_models/excluded_models or not logged in)"):format(
           reviewer_name(reviewer, i),
-          reviewer.model
+          reviewer.model_name
         )
       else
         subjects[#subjects + 1] = { reviewer, i }
@@ -108,7 +236,6 @@ maki.api.register_tool({
       end
     end
 
-    local notes = {}
     if #skipped > 0 then
       notes[#notes + 1] = "Skipped reviewers:\n" .. table.concat(skipped, "\n")
     end
@@ -125,24 +252,20 @@ maki.api.register_tool({
     local failed = 0
     for i, r in ipairs(results) do
       local reviewer, index = subjects[i][1], subjects[i][2]
-      local model = reviewer.name and reviewer.model
-      local header = "## " .. reviewer_name(reviewer, index) .. (model and (" - " .. model) or "")
+      local model_name = reviewer.name and reviewer.model_name
+      local header = "## " .. reviewer_name(reviewer, index) .. (model_name and (" - " .. model_name) or "")
       if r.ok and r.value and r.value ~= "" then
         sections[#sections + 1] = header .. "\n\n" .. r.value
       else
         failed = failed + 1
-        local cause = r.ok and "returned nothing" or (r.err or "unknown error")
+        local cause = failure_cause(r)
         sections[#sections + 1] = header .. "\n\nFAILED: " .. cause
-        maki.notify(
-          "multi-review " .. reviewer_name(reviewer, index) .. " failed: " .. cause,
-          "error",
-          { title = "multi-review" }
-        )
+        maki.ui.flash("multi-review " .. reviewer_name(reviewer, index) .. " failed: " .. cause)
       end
     end
 
     if failed == #fns then
-      notes[#notes + 1] = "Every reviewer that ran failed. Last error: " .. (results[#results].err or "unknown error")
+      notes[#notes + 1] = "Every reviewer that ran failed. Last error: " .. failure_cause(results[#results])
       return { llm_output = table.concat(notes, "\n\n"), format = "markdown", is_error = true }
     end
 

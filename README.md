@@ -14,6 +14,8 @@ maki.pack.add({ "https://github.com/karlprieb/maki-multi-review" })
 
 Maki asks once before installing, records the commit in `pack-lock.json`, and loads the package at startup. The plugin requests no permissions, so there is no second prompt.
 
+This package needs maki 0.5.4 or newer. `plugin.toml` declares that floor, and an older maki skips the plugin rather than loading it half working. The floor exists because `thinking` and `model_tier` reach the reviewer through the `task` tool, which only accepts them from 0.5.4 on.
+
 To pin a release, pass a table instead of a bare string:
 
 ```lua
@@ -28,6 +30,20 @@ Run `/packupdate maki-multi-review` to move to a newer commit.
 
 No reviewer is configured by default, so the tool errors until you set a list. The list lives in the `multireview.reviewers` slot.
 
+### Turn on the task model input
+
+To use `model_name`, set the task plugin to allow a model:
+
+```lua
+maki.setup({
+  plugins = {
+    task = { allow_model = true },
+  },
+})
+```
+
+This is off by default because the field costs tokens in every task schema. With it off the `task` tool drops the model, so every reviewer would run on your session's model. The plugin checks for this and stops with an error naming the reviewers that pinned a model, rather than running them on the wrong one. `model_tier` and `thinking` need no such setup.
+
 ### Global
 
 `~/.config/maki/init.lua` holds the list every project uses:
@@ -35,9 +51,9 @@ No reviewer is configured by default, so the tool errors until you set a list. T
 ```lua
 maki.api.set_slot("multireview.reviewers", function()
   return {
-    { model = "deepseek/deepseek-flash" },
-    { name = "security", model = "claude/claude-opus-5" },
-    { name = "performance" },
+    { model_name = "deepseek/deepseek-flash" },
+    { name = "security", model_name = "claude/claude-opus-5", thinking = "xhigh" },
+    { name = "performance", model_tier = "weak" },
   }
 end)
 ```
@@ -49,8 +65,8 @@ A trusted project's `.maki/init.lua` sets the same slot and wins, because projec
 ```lua
 maki.api.set_slot("multireview.reviewers", function()
   return {
-    { name = "concurrency", model = "claude/claude-opus-5" },
-    { name = "api compatibility", model = "claude/claude-opus-5" },
+    { name = "concurrency", model_name = "claude/claude-opus-5" },
+    { name = "api compatibility", model_name = "claude/claude-opus-5" },
   }
 end)
 ```
@@ -60,7 +76,7 @@ To keep the global reviewers and add to them, call `prev` and append:
 ```lua
 maki.api.set_slot("multireview.reviewers", function(prev)
   local list = prev()
-  table.insert(list, { name = "sql injection", model = "claude/claude-opus-5" })
+  table.insert(list, { name = "sql injection", model_name = "claude/claude-opus-5" })
   return list
 end)
 ```
@@ -69,12 +85,31 @@ The slot is read on every invocation, so `/reload` is enough after an edit. No r
 
 ### Reviewer options
 
-An entry is a table. Both fields are optional, and an empty table `{}` is a valid reviewer that runs the current model with no angle.
+An entry is a table. Every field is optional, and an empty table `{}` is a valid reviewer that runs the current model with no angle.
 
-| Field   | Type   | Default                     | What it does                                                                                                                        |
-| ------- | ------ | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `name`  | string | index plus model suffix     | The review angle. It goes into the reviewer's prompt ("Review these changes from a security angle") and becomes its section header. |
-| `model` | string | the session's current model | An exact model spec, the same string `/model` shows, such as `claude/claude-opus-5`.                                                |
+| Field          | Type               | Default                       | What it does                                                                                                                                 |
+| -------------- | ------------------ | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`         | string             | index plus model suffix       | The review angle. It goes into the reviewer's prompt ("Review these changes from a security angle") and becomes its section header.          |
+| `model_name`   | string             | the session's current model   | An exact model spec, the same string `/model` shows, such as `claude/claude-opus-5`. Needs `task.allow_model`.                               |
+| `thinking`     | string or number   | the session's level           | Reasoning depth for this reviewer: `off`, `adaptive`, an effort level from `minimal` to `max`, or a token budget. Capped at the session's.   |
+| `model_tier`   | string             | the session's model           | `strong`, `medium`, or `weak`. Picks a model by tier instead of naming a spec, which needs no login check.                                   |
+
+
+
+`thinking` and `model_tier` are requests, not commands. The host caps both at your own session: a reviewer can ask for less depth or a weaker model, never more. That makes them safe to set in a config file. Keeping one reviewer at `xhigh` and the rest at `off` is the usual reason to reach for it.
+
+The cap is silent, so a reviewer asking for more than the session runs is lowered to the session's level with no error. The report says which ones, and what they ran at:
+
+```text
+Thinking is capped at this session (medium), so these were lowered:
+security asked for high, ran at medium
+```
+
+A session set to `adaptive` has no ceiling, so reviewers get what they ask for. A session set to `off` can run nothing above it, so every reviewer runs with thinking off. Raise your own level with `/thinking` if you want a reviewer to go deeper.
+
+`model_name` and `model_tier` both pick the model, and `model_name` wins when you set both. Use `model_name` when you want one exact model, `model_tier` when you only care how strong it is.
+
+The old `model` key is now an error rather than a silently ignored field. Replace it with `model_name`; the error names the reviewer and the replacement.
 
 Without `name`, the generated name is the position in the list and the part of the model after the last slash, so `deepseek/deepseek-flash` at position 1 becomes `1-deepseek-flash`. That name still reaches the prompt, which is why a real angle is worth setting.
 
@@ -108,7 +143,7 @@ One markdown section per reviewer, separated by rules, then the main agent's con
 
 A reviewer whose model is not selectable is listed under "Skipped reviewers" with the reason, rather than being silently dropped. That happens when `allowed_models` or `excluded_models` filters the spec out, or when you are not logged in to that provider.
 
-A reviewer that fails gets a `FAILED` section naming the cause, plus a desktop notification. The run still returns the reviewers that worked. The tool reports an error only when nothing could run or every reviewer failed.
+A reviewer that fails gets a `FAILED` section naming the cause, plus a flash in the status line. The run still returns the reviewers that worked. The tool reports an error only when nothing could run or every reviewer failed.
 ## Development
 
 `nix develop` gives you everything the checks need: Rust 1.95 with rust-analyzer, `cargo-nextest`, `just`, `stylua`, and `nixfmt`. The toolchain matches the one maki's own flake pins, and the shell sets `OPENSSL_NO_VENDOR=1` so `openssl-sys` links the shell's OpenSSL instead of building its own.
